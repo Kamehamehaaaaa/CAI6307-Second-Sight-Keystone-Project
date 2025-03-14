@@ -1,6 +1,7 @@
 # CWDE615 3/13/25
 # Script that runs the model on the data in the provided directories.
 import os
+import argparse
 
 # TODO: In each model function, set up the model using the script provided by its maintainers and call it likewise on the data.
 
@@ -9,7 +10,6 @@ def llava1_6(data):
 	# NOTE: Different models have different imports, so we place them inside the function.
 	from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration
 	import torch
-	from PIL import Image
 	import requests
 
 	# Get llava1.6 from HF. See llava-hf/llava-v1.6-mistral-7b-hf on HF.
@@ -76,7 +76,7 @@ def qwen2_5(data):
 	    padding=True,
 	    return_tensors="pt",
 	)
-	inputs = inputs.to("cuda")
+	# inputs = inputs.to("cuda") # TODO: Uncomment with environment active.
 
 	# Inference: Generation of the output
 	generated_ids = model.generate(**inputs, max_new_tokens=128)
@@ -93,7 +93,9 @@ def qwen2_5(data):
 
 def model_router(arg = None, data = None):
 	if arg == "llava-hf/llava-v1.6-mistral-7b-hf":
-		return llava(data)
+		return llava1_6(data)
+	elif arg = "Qwen/Qwen2.5-VL-7B-Instruct":
+		return qwen2_5(data)
 	elif arg = None:
 		print("No arg provided to router.")
 		return None
@@ -103,3 +105,15 @@ def model_router(arg = None, data = None):
 
 if __name__ == "__main__":
 	# TODO: Use args to call the right model_router function, which in turn, calls the various other model functions on the same data.
+	argparse.ArgumentParser(
+		prog = "RUN MODEL",
+		description = "This script runs a model whose HF tag is in the 'm' flag using the prompt stored in PROMPT using the comics in the 'comics' folder as input and writing output to 'output'."
+	)
+
+	parser.add_argument('-m','--model',required=True,help='the model to be run')
+	args = parser.parse_args()
+
+	text = model_router(args.model)
+
+	assert text is not None
+	print(text)
