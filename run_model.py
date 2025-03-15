@@ -1,119 +1,439 @@
-# CWDE615 3/13/25
-# Script that runs the model on the data in the provided directories.
+
+# CWDE615 3/15/24
+# run a model to do a task on the comic data and write responses to a file.
+
+import sys
+import csv
+import torch
 import os
 import argparse
+from dotenv import load_dotenv
+import numpy as np
+from abc import abstractmethod, ABC
 
-# TODO: In each model function, set up the model using the script provided by its maintainers and call it likewise on the data.
+def write_tsv(rows, filename, writeHeader = True, delimiter = '\t', dtype='U500', fmt='%s'):
+	arr = np.asarray(rows, dtype = dtype)
+	np.savetxt(filename, arr, fmt = fmt, delimiter = delimiter)
 
+def load_tsv(filename, delimiter='\t', dtype='U500', max_rows = 300):
+	arr = np.loadtxt(filename, dtype = dtype, delimiter = delimiter, max_rows = max_rows)
+	if len(arr.shape) == 1:  # reshape the arr if there is only one element in the list.
+		arr = arr.reshape(1, arr.shape[0])
+	elif len(arr.shape) == 0: # this occcurs when there is only 1 column and 1 row in the read file.
+		arr = arr.reshape(1, 1)
 
-def llava1_6(data):
-	# NOTE: Different models have different imports, so we place them inside the function.
-	from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration
-	import torch
-	import requests
+	return arr
 
-	# Get llava1.6 from HF. See llava-hf/llava-v1.6-mistral-7b-hf on HF.
-	processor = LlavaNextProcessor.from_pretrained("llava-hf/llava-v1.6-mistral-7b-hf")
+class VLM(ABC):
+	def __init__(self, MODEL): # Positional arg model passed up from concrete subclass. Investigate whether this is actually necessary.
 
-	model = LlavaNextForConditionalGeneration.from_pretrained("llava-hf/llava-v1.6-mistral-7b-hf", torch_dtype=torch.float16, low_cpu_mem_usage=True) 
-	model.to("cuda:0")
+		self.MODEL = MODEL
+		self.TOKENIZER = os.getenv('TOKENIZER')
+		self.DELIMITER = os.getenv('DELIMITER')
+		self.SRC_DIR = os.getenv('SRC_DIR')
+		self.EXT = os.getenv('EXT')
+		self.DATA_EXT = os.getenv('DATA_EXT')
+		self.FILE = MODEL.split('/')[-1]
+		self.PROMPT_FILE = os.getenv('PROMPT_FILE')
+		self.IMG_DIR = os.getenv('IMG_DIR')
+		self.IMG_LIST = os.listdir(self.IMG_DIR)
 
-	# With transformers>=4.48, we no longer have to load a PIL image.
-	messages = [
-	    {
-	        "role": "user",
-	        "content": [
-	            {"type": "image", "url": "https://www.ilankelman.org/stopsigns/australia.jpg"}
-	            {"type": "text", "text": "What is shown in this image?"},
-	        ],
-	    },
-	]
+		self.queries = self.get_queries()
 
-	inputs = processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt")
-	output = model.generate(**inputs, max_new_tokens=50)
+		self.DEVICE = "cuda" # No alternative to cuda because HPG gives easy access to CUDA GPUs.
 
-	return output
+	@abstractmethod
+	def setup(self):
+		pass
 
-def qwen2_5(data):
-	from transformers import Qwen2_5_VLForConditionalGeneration, AutoTokenizer, AutoProcessor
-	from qwen_vl_utils import process_vision_info
+	@abstractmethod
+	def call(self):
+		pass
 
+	def get_labels(self):
+		pass
 
-	# We recommend enabling flash_attention_2 for better acceleration and memory saving, especially in multi-image and video scenarios.
-	model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-	    "Qwen/Qwen2.5-VL-7B-Instruct",
-	    torch_dtype=torch.bfloat16,
-	    attn_implementation="flash_attention_2",
-	    device_map="auto",
-	)
+	def get_classes(self):
+		# Do not use load_tsv in this case because we rely on loadtxt's default behavior to get the transpose of what's actually in the file.
+		pass
 
-	# default processer
-	# The default range for the number of visual tokens per image in the model is 4-16384.
-	processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
+	def get_tasks(self):
+		pass
 
-	messages = [
-	    {
-	        "role": "user",
-	        "content": [
-	            {
-	                "type": "image",
-	                "image": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg",
-	            },
-	            {"type": "text", "text": "Describe this image."},
-	        ],
-	    }
-	]
+	def get_queries(self):
+		# For this version of the VLM framework, we will have a prompt file with single entry.
+		# This produces a 1x1 matrix in the load_tsv file, but we just want the raw string.
+		tmp = load_tsv(self.PROMPT_FILE, dtype='U2048')
+		return tmp[1,1]
 
-	# Preparation for inference
-	text = processor.apply_chat_template(
-	    messages, tokenize=False, add_generation_prompt=True
-	)
-	image_inputs, video_inputs = process_vision_info(messages)
-	inputs = processor(
-	    text=[text],
-	    images=image_inputs,
-	    videos=video_inputs,
-	    padding=True,
-	    return_tensors="pt",
-	)
-	# inputs = inputs.to("cuda") # TODO: Uncomment with environment active.
+	def calc_metrics(self, responses):
+		pass
 
-	# Inference: Generation of the output
-	generated_ids = model.generate(**inputs, max_new_tokens=128)
-	generated_ids_trimmed = [
-	    out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-	]
-	output_text = processor.batch_decode(
-	    generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-	)
+	def write_metrics(self, metrics, counts):
+		pass
 
-	return output_text
+	def write_responses(self, filename, imgs, responses):
+		write_tsv(list(zip(imgs, responses)), filename, delimiter = self.DELIMITER)
 
 
+	def __call__(self):
+		filename = f'{self.SRC_DIR}/{self.FILE}_responses.{self.DATA_EXT}'
 
-def model_router(arg = None, data = None):
-	if arg == "llava-hf/llava-v1.6-mistral-7b-hf":
-		return llava1_6(data)
-	elif arg = "Qwen/Qwen2.5-VL-7B-Instruct":
-		return qwen2_5(data)
-	elif arg = None:
-		print("No arg provided to router.")
-		return None
+		print(f'Running model: {self.MODEL}')
+		print(f'Writing responses to relative path: {filename}')
+		print(f'Query Dictionary: {self.queries}')
+
+		responses = self.call()
+
+		self.write_responses(filename, self.IMG_LIST, responses)
+
+		return responses
+
+class Llava(VLM):
+	def __init__(self):
+		super().__init__('llava-hf/llava-v1.6-mistral-7b-hf')
+
+		self.chatbot, self.processor = self.setup()
+
+	def setup(self):
+		from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration
+
+		processor = LlavaNextProcessor.from_pretrained(self.MODEL)
+
+		chatbot = LlavaNextForConditionalGeneration.from_pretrained(self.MODEL, torch_dtype=torch.float16)
+		chatbot.to(self.DEVICE)
+
+		return chatbot, processor
+
+	def call(self):
+		# Configure LLaVA 1.6 with mistral according to HF repo's directions.
+		# See https://huggingface.co/llava-hf/llava-v1.6-mistral-7b-hf
+		from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration
+		from PIL import Image
+		import requests
+
+		# Set all the local const and variables to the attributes defined in super().__init__().
+		# TODO: Go through this function and change all instances of the variables to attribute accesses.
+		MODEL = self.MODEL
+		DELIMITER = self.DELIMITER
+
+		responses = np.empty(shape  = (len(self.IMG_LIST),), dtype = 'U2048')
+
+		for i, img_file in enumerate(self.IMG_LIST):
+			query = self.queries
+
+			img = Image.open(f'{self.SRC_DIR}/{self.IMG_DIR}/{img_file}').convert('RGB')
+			prompt = f"[INST] <image>\n{query}[/INST]"
+
+			inputs = self.processor(prompt, img, return_tensors="pt").to("cuda")
+			raw_output = self.chatbot.generate(**inputs, max_new_tokens=2048)[0]
+			responses[i] = self.processor.decode(raw_output, skip_special_tokens=True).split('[/INST]')[1].strip()
+
+		return responses
+
+class CogVLM(VLM):
+	def __init__(self):
+		super().__init__('THUDM/cogvlm-chat-hf')
+
+		self.model, self.tokenizer = self.setup()
+
+	def setup(self):
+		from transformers import AutoModelForCausalLM, LlamaTokenizer
+
+		tokenizer = LlamaTokenizer.from_pretrained(self.TOKENIZER)
+		model = AutoModelForCausalLM.from_pretrained(
+	    		self.MODEL,
+	    		torch_dtype=torch.bfloat16,
+	    		low_cpu_mem_usage=True,
+	    		trust_remote_code=True
+		).to(self.DEVICE).eval()
+
+		return model, tokenizer
+
+	def call(self):
+		# Load model directly
+		import requests
+		from PIL import Image
+		from transformers import AutoModelForCausalLM, LlamaTokenizer
+
+		MODEL = self.MODEL
+		TOKENIZER = self.TOKENIZER
+		DELIMITER = self.DELIMITER
+
+		responses = np.empty(shape  = (len(self.IMG_LIST),), dtype = 'U2048')
+
+		for i, img_file in enumerate(self.IMG_LIST):
+			query = self.queries
+
+			# loading model with code from HuggingFace THUDM page: https://huggingface.co/THUDM/cogvlm-chat-hf
+			# chat example
+			image = Image.open(f'{self.SRC_DIR}/{self.IMG_DIR}/{img_file}').convert('RGB')
+			inputs = self.model.build_conversation_input_ids(self.tokenizer, query=query, history=[], images=[image], template_version='vqa')  # chat mode
+
+			inputs = {
+	    			'input_ids': inputs['input_ids'].unsqueeze(0).to('cuda'),
+	    			'token_type_ids': inputs['token_type_ids'].unsqueeze(0).to('cuda'),
+	    			'attention_mask': inputs['attention_mask'].unsqueeze(0).to('cuda'),
+	    			'images': [inputs['images'][0].unsqueeze(0).to('cuda').to(torch.bfloat16)],
+			}
+
+			gen_kwargs = {"max_length": 2048, "do_sample": False}
+
+			with torch.no_grad():
+				outputs = self.model.generate(**inputs, **gen_kwargs)
+				outputs = outputs[:, inputs['input_ids'].shape[1]:]
+
+				responses[i] = self.tokenizer.decode(outputs[0]).split('</s>')[0] # split an index to remove the ending character.
+
+		return responses
+
+class CogVLM2(VLM):
+	def __init__(self):
+		super().__init__("THUDM/cogvlm2-llama3-chat-19B")
+
+		self.model, self.tokenizer = self.setup()
+
+	def setup(self):
+		from transformers import AutoModelForCausalLM, AutoTokenizer
+
+		MODEL_PATH = self.MODEL
+		DEVICE = self.DEVICE  # if torch.cuda.is_available() else 'cpu' # removed this if expression because we should always have cuda available and will want errors if not.
+		TORCH_TYPE = torch.bfloat16 # if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+
+		tokenizer = AutoTokenizer.from_pretrained(
+		    MODEL_PATH,
+		    trust_remote_code=True
+		)
+
+		model = AutoModelForCausalLM.from_pretrained(
+		    MODEL_PATH,
+		    torch_dtype=TORCH_TYPE,
+		    trust_remote_code=True,
+		).to(DEVICE).eval()
+
+		return model, tokenizer
+
+	def call(self):
+		# Load model directly
+		from PIL import Image
+		from transformers import AutoModelForCausalLM, AutoTokenizer
+
+		MODEL = self.MODEL
+		TOKENIZER = self.TOKENIZER
+		DELIMITER = self.DELIMITER
+
+		DEVICE = self.DEVICE  # if torch.cuda.is_available() else 'cpu' # removed this if expression because we should always have cuda available and will want errors if not.
+		TORCH_TYPE = torch.bfloat16 # if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+
+
+		responses = np.empty(shape  = (len(self.IMG_LIST),), dtype = 'U2048')
+
+		for i, img_file in enumerate(self.IMG_LIST):
+			query = self.queries
+
+			# loading model with code from HuggingFace THUDM page: https://huggingface.co/THUDM/cogvlm2-llama3-chat-19B
+			# chat example
+			image = Image.open(f'{self.SRC_DIR}/{self.IMG_DIR}/{img_file}').convert('RGB')
+
+			input_by_model = self.model.build_conversation_input_ids(
+				self.tokenizer,
+				query=query,
+				images=[image],
+				template_version='chat'
+			)
+
+			inputs = {
+		            'input_ids': input_by_model['input_ids'].unsqueeze(0).to(DEVICE),
+		            'token_type_ids': input_by_model['token_type_ids'].unsqueeze(0).to(DEVICE),
+		            'attention_mask': input_by_model['attention_mask'].unsqueeze(0).to(DEVICE),
+		            'images': [[input_by_model['images'][0].to(DEVICE).to(TORCH_TYPE)]],
+		        }
+
+			gen_kwargs = {
+		            "max_new_tokens": 2048,
+		            "pad_token_id": 128002,
+		        }
+
+			with torch.no_grad():
+				outputs = self.model.generate(**inputs, **gen_kwargs)
+				outputs = outputs[:, inputs['input_ids'].shape[1]:]
+
+				responses[i] = self.tokenizer.decode(outputs[0]).split("<|end_of_text|>")[0]
+
+		return responses
+
+class FlanT5(VLM):
+	def __init__(self):
+		super().__init__("Salesforce/blip2-flan-t5-xl")
+
+		self.model, self.processor = self.setup()
+
+	def setup(self):
+		# pip install accelerate
+		from transformers import Blip2Processor, Blip2ForConditionalGeneration
+
+		processor = Blip2Processor.from_pretrained(self.MODEL)
+		model = Blip2ForConditionalGeneration.from_pretrained(self.MODEL, torch_dtype=torch.float16).to(self.DEVICE)
+
+		return model, processor
+
+	def call(self):
+		import requests
+		from PIL import Image
+
+		MODEL = self.MODEL
+		TOKENIZER = self.TOKENIZER
+		DELIMITER = self.DELIMITER
+
+		# Call FlanT5 using the sample script for half-precision floats on the GPU
+		# See https://huggingface.co/Salesforce/blip2-flan-t5-xl
+		responses = np.empty(shape  = (len(self.IMG_LIST),), dtype = 'U2048')
+
+		for i, img_file in enumerate(self.IMG_LIST):
+			query = self.queries
+
+			raw_image = Image.open(f'{self.SRC_DIR}/{self.IMG_DIR}/{img_file}').convert('RGB')
+
+			inputs = self.processor(raw_image, query, return_tensors="pt").to(self.DEVICE, torch.float16)
+
+			out = self.model.generate(**inputs)
+			responses[i] = self.processor.decode(out[0], skip_special_tokens=True)
+
+		return responses
+
+class Idefics9b(VLM): # TODO replace with Idefics3
+	def __init__(self):
+		super().__init__("HuggingFaceM4/idefics-9b")
+
+		self.model, self.processor = self.setup()
+
+	def setup(self):
+		from transformers import IdeficsForVisionText2Text, AutoProcessor
+
+		# if expression commented out because we are only going to run on CUDA
+		device = self.DEVICE # if torch.cuda.is_available() else "cpu"
+
+		checkpoint = self.MODEL
+		model = IdeficsForVisionText2Text.from_pretrained(checkpoint, torch_dtype=torch.bfloat16).to(device)
+		processor = AutoProcessor.from_pretrained(checkpoint)
+
+		return model, processor
+
+	def call(self):
+		from PIL import Image
+
+		MODEL = self.MODEL
+		TOKENIZER = self.TOKENIZER
+		DELIMITER = self.DELIMITER
+
+		responses = np.empty(shape  = (len(self.IMG_LIST),), dtype = 'U2048')
+
+		# See https://huggingface.co/HuggingFaceM4/idefics-9b-instruct
+		for i, img_file in enumerate(self.IMG_LIST):
+			query = self.queries
+
+			image = Image.open(f'{self.SRC_DIR}/{self.IMG_DIR}/{img_file}').convert('RGB')
+
+			# We feed to the model an arbitrary sequence of text strings and images. Images can be either URLs or PIL Images.
+			prompts = [[image, query]]
+
+			# --batched mode
+			# inputs = self.processor(prompts, return_tensors="pt").to(self.DEVICE)
+			# --single sample mode
+			inputs = self.processor(prompts[0], return_tensors="pt").to(self.DEVICE)
+
+			# Generation args
+			# bad_words_ids = self.processor.tokenizer(["<image>", "<fake_token_around_image>"], add_special_tokens=False).input_ids
+
+			generated_ids = self.model.generate(**inputs, max_length=2048)
+			responses[i] = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+
+		return responses
+
+class InstructBlipVicunna7b(VLM):
+	def __init__(self):
+		super().__init__("Salesforce/instructblip-vicuna-7b")
+
+		self.model, self.processor = self.setup()
+
+	def setup(self):
+		from transformers import InstructBlipProcessor, InstructBlipForConditionalGeneration
+
+		model = InstructBlipForConditionalGeneration.from_pretrained(self.MODEL)
+		processor = InstructBlipProcessor.from_pretrained(self.MODEL)
+
+		# commented out
+		device = self.DEVICE # if torch.cuda.is_available() else "cpu"
+		model.to(device)
+
+		return model, processor
+
+	def call(self):
+		from PIL import Image
+
+		MODEL = self.MODEL
+		TOKENIZER = self.TOKENIZER
+		DELIMITER = self.DELIMITER
+
+		device = self.DEVICE
+
+		# See https://huggingface.co/Salesforce/instructblip-vicuna-7b
+		responses = np.empty(shape  = (len(self.IMG_LIST),), dtype = 'U2048')
+
+		for i, img_file in enumerate(self.IMG_LIST):
+			query = self.queries
+
+			image = Image.open(f'{self.SRC_DIR}/{self.IMG_DIR}/{img_file}').convert('RGB')
+
+			inputs = self.processor(images=image, text=prompt, return_tensors="pt").to(device)
+
+			outputs = self.model.generate(
+			        **inputs,
+			        do_sample=False,
+			        num_beams=5,
+			        max_length=256,
+			        min_length=1,
+			        top_p=0.9,
+			        repetition_penalty=1.5,
+			        length_penalty=1.0,
+			        temperature=1,
+			)
+
+			responses[i] = self.processor.batch_decode(outputs, skip_special_tokens=True)[0].strip()
+
+		return responses
+
+
+def model_factory(MODEL):
+	if MODEL == 'llava-hf/llava-v1.6-mistral-7b-hf':
+		return Llava()
+	elif MODEL == 'THUDM/cogvlm-chat-hf':
+		return CogVLM()
+	elif MODEL == "THUDM/cogvlm2-llama3-chat-19B":
+		return CogVLM2()
+	elif MODEL == "Salesforce/blip2-flan-t5-xl":
+		return FlanT5()
+	elif MODEL == "HuggingFaceM4/idefics-9b":
+		return Idefics9b()
+	elif MODEL == "Salesforce/instructblip-vicuna-7b":
+		return InstructBlipVicunna7b()
 	else:
-		print("Invalid arg provided to router.")
 		return None
 
 if __name__ == "__main__":
-	# TODO: Use args to call the right model_router function, which in turn, calls the various other model functions on the same data.
-	argparse.ArgumentParser(
-		prog = "RUN MODEL",
-		description = "This script runs a model whose HF tag is in the 'm' flag using the prompt stored in PROMPT using the comics in the 'comics' folder as input and writing output to 'output'."
-	)
+	# load environment first thing.
+	load_dotenv()
 
-	parser.add_argument('-m','--model',required=True,help='the model to be run')
+	parser = argparse.ArgumentParser(
+			prog = "RUN MODEL",
+			description='This script runs the model stored in argument m to perform tasks on the image dataset.'
+	)
+	parser.add_argument('-m','--model', default=os.getenv('MODEL'), help='the model to be run')
+
 	args = parser.parse_args()
 
-	text = model_router(args.model)
+	model = model_factory(args.model)
 
-	assert text is not None
-	print(text)
+	assert model is not None
+
+	model()
