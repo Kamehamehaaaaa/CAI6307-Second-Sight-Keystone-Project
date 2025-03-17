@@ -402,6 +402,110 @@ class InstructBlipVicunna7b(VLM):
 			responses[i] = self.processor.batch_decode(outputs, skip_special_tokens=True)[0].strip()
 
 		return responses
+	
+
+class idefics3_8b(VLM):
+
+	def __init__(self):
+		super().__init__("HuggingFaceM4/Idefics3-8B-Llama3")
+
+		self.model, self.processor = self.setup()
+	
+	def setup(self):
+		import torch
+		from transformers import AutoProcessor, AutoModelForVision2Seq
+		
+		device = self.DEVICE
+		model_id = self.MODEL
+        
+		processor = AutoProcessor.from_pretrained(model_id)
+		model = AutoModelForVision2Seq.from_pretrained(
+			model_id, torch_dtype=torch.bfloat16
+			).to(device)
+		
+		return model, processor
+
+	def call(self):
+		from PIL import Image
+
+		responses = []
+		question = self.queries[0]		# since we have only one prompt 
+
+		for i, img_file in enumerate(self.IMG_LIST):
+			image = Image.open(f'{self.SRC_DIR}/{self.IMG_DIR}/{img_file}').convert('RGB')
+			message = [
+				{
+					"role": "user",
+					"content": [
+						{"type": "image"},
+						{"type": "text", "text": question},
+					]
+				} 
+			]
+			prompt = self.processor.apply_chat_template(message, add_generation_prompt=True)
+			inputs = self.processor(text=prompt, images=[image], return_tensors="pt")
+			inputs = {k: v.to(self.DEVICE) for k, v in inputs.items()}
+
+			generated_ids = self.model.generate(**inputs, max_new_tokens=5000)
+			generated_texts = self.processor.batch_decode(generated_ids, skip_special_tokens=True)
+
+			#output generated of form "User: <question>, Assistant: <answer>"
+
+			responses[i] = generated_texts[0][generated_texts[0].find("Assistant: ")+11:]
+
+		return responses
+	
+
+class qwen2_5(VLM):
+	def __init__(self):
+		super().__init__("Qwen/Qwen2.5-VL-72B-Instruct")
+
+		self.model, self.processor = self.setup()
+
+	def setup(self):
+		from transformers import Qwen2_5_VLForConditionalGeneration, AutoTokenizer, AutoProcessor
+		from qwen_vl_utils import process_vision_info
+
+		model_id = "Qwen/Qwen2.5-VL-72B-Instruct"
+		self.DEVICE = "cuda"
+
+		model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+					model_id, torch_dtype="auto", device_map="auto"
+				)
+
+		processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-72B-Instruct")
+
+		return model, processor
+        
+	def call(self):
+
+		from PIL import Image
+
+		responses = []
+		question = self.queries[0]		# since we have only one prompt 
+
+		for i, img_file in enumerate(self.IMG_LIST):
+			image = Image.open(f'{self.SRC_DIR}/{self.IMG_DIR}/{img_file}').convert('RGB')
+			message = [
+				{
+					"role": "user",
+					"content": [
+						{"type": "image"},
+						{"type": "text", "text": question},
+					]
+				} 
+			]
+
+			prompt = self.processor.apply_chat_template(message, add_generation_prompt=True)
+			inputs = self.processor(text=prompt, images=[image], return_tensors="pt")
+			inputs = {k: v.to(self.DEVICE) for k, v in inputs.items()}
+
+			generated_ids = self.model.generate(**inputs, max_new_tokens=5000)
+			generated_texts = self.processor.batch_decode(generated_ids, skip_special_tokens=True)
+
+			responses[i] = generated_texts
+
+		return responses
 
 
 def model_factory(MODEL):
@@ -417,6 +521,10 @@ def model_factory(MODEL):
 		return Idefics9b()
 	elif MODEL == "Salesforce/instructblip-vicuna-7b":
 		return InstructBlipVicunna7b()
+	elif MODEL == "HuggingFaceM4/Idefics3-8B-Llama3":
+		return idefics3_8b()
+	elif MODEL == "Qwen/Qwen2.5-VL-72B-Instruct":
+		return qwen2_5()
 	else:
 		return None
 
