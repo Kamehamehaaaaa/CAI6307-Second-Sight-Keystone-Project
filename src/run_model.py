@@ -506,8 +506,43 @@ class qwen2_5(VLM):
 			responses[i] = generated_texts
 
 		return responses
+	
 
+class miniCPM(VLM):
+	def __init__(self):
+		super().__init__("openbmb/MiniCPM-V-2_6")
 
+		self.model, self.tokenizer = self.setup()
+
+	def setup(self):
+		import torch
+		from transformers import AutoModel, AutoTokenizer
+
+		model = AutoModel.from_pretrained(self.MODEL, trust_remote_code=True,
+			attn_implementation='sdpa', torch_dtype=torch.bfloat16) # sdpa or flash_attention_2, no eager
+		model = model.eval().cuda()
+		tokenizer = AutoTokenizer.from_pretrained(self.MODEL, trust_remote_code=True)
+
+		return model, tokenizer
+	
+	def call(self):
+		from PIL import Image
+
+		responses = []
+		question = self.queries[0]		# since we have only one prompt 
+
+		for i, img_file in enumerate(self.IMG_LIST):
+			image = (Image.open(img_file).convert('RGB'))
+			msgs = [{'role': 'user', 'content': [question]}]
+
+			responses[i] = self.model.chat(
+				image=image,
+				msgs=msgs,
+				tokenizer=self.tokenizer
+			)
+
+		return responses
+	
 def model_factory(MODEL):
 	if MODEL == 'llava-hf/llava-v1.6-mistral-7b-hf':
 		return Llava()
@@ -525,6 +560,8 @@ def model_factory(MODEL):
 		return idefics3_8b()
 	elif MODEL == "Qwen/Qwen2.5-VL-72B-Instruct":
 		return qwen2_5()
+	elif MODEL == "openbmb/MiniCPM-V-2_6":
+		return miniCPM()
 	else:
 		return None
 
