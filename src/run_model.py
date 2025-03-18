@@ -128,7 +128,6 @@ class Llava(VLM):
 			inputs = self.processor(img, prompt, return_tensors="pt").to("cuda")
 			raw_output = self.chatbot.generate(**inputs, max_new_tokens=2048)[0]
 			responses[i] = self.processor.decode(raw_output, skip_special_tokens=True).split('[/INST]')[1].strip()
-			print(responses[i])
 
 		return responses
 
@@ -225,7 +224,6 @@ class CogVLM2(VLM):
 
 		DEVICE = self.DEVICE  # if torch.cuda.is_available() else 'cpu' # removed this if expression because we should always have cuda available and will want errors if not.
 		TORCH_TYPE = torch.bfloat16 # if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8 else torch.float16
-
 
 		responses = np.empty(shape  = (len(self.IMG_LIST),), dtype = 'U2048')
 
@@ -386,15 +384,14 @@ class InstructBlipVicunna7b(VLM):
 
 			image = Image.open(f'{self.SRC_DIR}/{self.IMG_DIR}/{img_file}').convert('RGB')
 
-			inputs = self.processor(images=image, text=prompt, return_tensors="pt").to(device)
+			inputs = self.processor(images=image, text=query, return_tensors="pt").to(device)
 
 			outputs = self.model.generate(
 			        **inputs,
-			        do_sample=False,
+			        do_sample=True,
 			        num_beams=5,
 			        max_length=256,
 			        min_length=1,
-			        top_p=0.9,
 			        repetition_penalty=1.5,
 			        length_penalty=1.0,
 			        temperature=1,
@@ -403,7 +400,7 @@ class InstructBlipVicunna7b(VLM):
 			responses[i] = self.processor.batch_decode(outputs, skip_special_tokens=True)[0].strip()
 
 		return responses
-	
+
 
 class idefics3_8b(VLM):
 
@@ -411,19 +408,19 @@ class idefics3_8b(VLM):
 		super().__init__("HuggingFaceM4/Idefics3-8B-Llama3")
 
 		self.model, self.processor = self.setup()
-	
+
 	def setup(self):
 		import torch
 		from transformers import AutoProcessor, AutoModelForVision2Seq
-		
+
 		device = self.DEVICE
 		model_id = self.MODEL
-        
+
 		processor = AutoProcessor.from_pretrained(model_id)
 		model = AutoModelForVision2Seq.from_pretrained(
 			model_id, torch_dtype=torch.bfloat16
 			).to(device)
-		
+
 		return model, processor
 
 	def call(self):
@@ -455,7 +452,6 @@ class idefics3_8b(VLM):
 			responses[i] = generated_texts[0][generated_texts[0].find("Assistant: ")+11:]
 
 		return responses
-	
 
 class qwen2_5(VLM):
 	def __init__(self):
@@ -475,9 +471,8 @@ class qwen2_5(VLM):
 				)
 
 		processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-72B-Instruct")
-
 		return model, processor
-        
+
 	def call(self):
 
 		from PIL import Image
@@ -507,7 +502,7 @@ class qwen2_5(VLM):
 			responses[i] = generated_texts
 
 		return responses
-	
+
 
 class miniCPM(VLM):
 	def __init__(self):
@@ -525,7 +520,7 @@ class miniCPM(VLM):
 		tokenizer = AutoTokenizer.from_pretrained(self.MODEL, trust_remote_code=True)
 
 		return model, tokenizer
-	
+
 	def call(self):
 		from PIL import Image
 
@@ -543,7 +538,7 @@ class miniCPM(VLM):
 			)
 
 		return responses
-	
+
 def model_factory(MODEL):
 	if MODEL == 'llava-hf/llava-v1.6-mistral-7b-hf':
 		return Llava()
