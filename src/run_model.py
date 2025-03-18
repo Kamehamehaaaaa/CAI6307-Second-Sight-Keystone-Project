@@ -36,7 +36,7 @@ class VLM(ABC):
 		self.FILE = MODEL.split('/')[-1]
 		self.PROMPT_FILE = os.getenv('PROMPT_FILE')
 		self.IMG_DIR = os.getenv('IMG_DIR')
-		self.IMG_LIST = os.listdir(self.IMG_DIR)
+		self.IMG_LIST = os.listdir(f'{self.SRC_DIR}/{self.IMG_DIR}')
 
 		self.queries = self.get_queries()
 
@@ -63,8 +63,8 @@ class VLM(ABC):
 	def get_queries(self):
 		# For this version of the VLM framework, we will have a prompt file with single entry.
 		# This produces a 1x1 matrix in the load_tsv file, but we just want the raw string.
-		tmp = load_tsv(self.PROMPT_FILE, dtype='U2048')
-		return tmp[1,1]
+		tmp = load_tsv(f'{self.SRC_DIR}/{self.PROMPT_FILE}', dtype='U2048')
+		return tmp[0,0]
 
 	def calc_metrics(self, responses):
 		pass
@@ -125,9 +125,10 @@ class Llava(VLM):
 			img = Image.open(f'{self.SRC_DIR}/{self.IMG_DIR}/{img_file}').convert('RGB')
 			prompt = f"[INST] <image>\n{query}[/INST]"
 
-			inputs = self.processor(prompt, img, return_tensors="pt").to("cuda")
+			inputs = self.processor(img, prompt, return_tensors="pt").to("cuda")
 			raw_output = self.chatbot.generate(**inputs, max_new_tokens=2048)[0]
 			responses[i] = self.processor.decode(raw_output, skip_special_tokens=True).split('[/INST]')[1].strip()
+			print(responses[i])
 
 		return responses
 
