@@ -31,6 +31,7 @@ class VLM(ABC):
 		self.TOKENIZER = os.getenv('TOKENIZER')
 		self.DELIMITER = os.getenv('DELIMITER')
 		self.SRC_DIR = os.getenv('SRC_DIR')
+		self.VLM_DIR = os.getenv('VLM_DIR')
 		self.EXT = os.getenv('EXT')
 		self.DATA_EXT = os.getenv('DATA_EXT')
 		self.FILE = MODEL.split('/')[-1]
@@ -72,20 +73,23 @@ class VLM(ABC):
 	def write_metrics(self, metrics, counts):
 		pass
 
-	def write_responses(self, filename, imgs, responses):
-		write_tsv(list(zip(imgs, responses)), filename, delimiter = self.DELIMITER)
+	def write_responses(self, imgs, responses):
+		os.makedirs(f"{self.SRC_DIR}/{self.VLM_DIR}/{self.FILE}", exist_ok=True)
+		for img, response in zip(imgs, responses):
+			filename = f"{self.SRC_DIR}/{self.VLM_DIR}/{self.FILE}/{img}_repsonse.{self.DATA_EXT}"
+			np.savetxt(filename, [response], fmt = '%s')
 
 
 	def __call__(self):
-		filename = f'{self.SRC_DIR}/{self.FILE}_responses.{self.DATA_EXT}'
+		path = f'{self.SRC_DIR}/{self.VLM_DIR}/<img_filename>_responses.{self.DATA_EXT}'
 
 		print(f'Running model: {self.MODEL}')
-		print(f'Writing responses to relative path: {filename}')
+		print(f'Writing responses to relative path: {path}')
 		print(f'Query Dictionary: {self.queries}')
 
 		responses = self.call()
 
-		self.write_responses(filename, self.IMG_LIST, responses)
+		self.write_responses(self.IMG_LIST, responses)
 
 		return responses
 
