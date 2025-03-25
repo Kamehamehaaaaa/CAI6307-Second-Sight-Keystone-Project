@@ -12,7 +12,7 @@ class evaluation:
         self.model = BertModel.from_pretrained("bert-base-multilingual-uncased")
 
     def vectorizeText(self, text, is_groundtruth):
-        encoded_input = self.tokenizer(text, return_tensors='pt')
+        encoded_input = self.tokenizer(text, return_tensors='pt', max_length=512)
         with torch.no_grad():
             output = self.model(**encoded_input)
         token_embeddings = output.last_hidden_state
@@ -53,16 +53,19 @@ if __name__ == "__main__":
     kl_div = {}
     
     for i, ground_truth in enumerate(ground_truths):
-        evaluation.vectorizeText([read(ground_truth)], 1)
+        evaluation.vectorizeText([read(ground_truth_dir+"/"+ground_truth)], 1)
         for k, vlm in enumerate(vlms):
-            vlm_outputs = os.listdir(vlm)
+            vlm_outputs = os.listdir(vlms_dir+"/"+vlm)
             for j, vlm_output in enumerate(vlm_outputs):
-                evaluation.vectorizeText([read(vlm_output)], 0)
-                if i not in cosine_sim:
-                    cosine_sim[i] = []
-                cosine_sim[i].append(evaluation.cosine_sim())
-                if i not in kl_div:
-                    kl_div[i] = []
-                kl_div[i].append(evaluation.kl_divergence().item())
-                
-            
+                if (vlm_output.split(".")[0] == ground_truth.split(".")[0]):
+                    print(i, "comparing ", ground_truth, vlm_output, "for vlm ", vlm)
+                    evaluation.vectorizeText([read(vlms_dir+"/"+vlm+"/"+vlm_output)], 0)
+                    if i not in cosine_sim:
+                        cosine_sim[i] = []
+                    cosine_sim[i].append(evaluation.cosine_sim())
+                    if i not in kl_div:
+                        kl_div[i] = []
+                    kl_div[i].append(evaluation.kl_divergence().item())
+                    break
+    print(cosine_sim)
+    print(kl_div)
